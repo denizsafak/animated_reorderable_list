@@ -12,6 +12,7 @@ class _DragInfo extends Drag {
   final VoidCallback? onDragCompleted;
   final ReorderItemProxyDecorator? proxyDecorator;
   final TickerProvider tickerProvider;
+  final ValueNotifier<Offset> positionNotifier;
 
   late ReorderableAnimatedBuilderState listState;
   late int index;
@@ -35,7 +36,7 @@ class _DragInfo extends Drag {
     this.onDragCompleted,
     this.proxyDecorator,
     required this.tickerProvider,
-  }) {
+  }) : positionNotifier = ValueNotifier(initialPosition) {
     final RenderBox itemRenderBox = item.context.findRenderObject()! as RenderBox;
     listState = item.listState;
     index = item.index;
@@ -50,6 +51,7 @@ class _DragInfo extends Drag {
 
   void dispose() {
     _proxyAnimation?.dispose();
+    positionNotifier.dispose();
   }
 
   void startDrag() {
@@ -66,6 +68,7 @@ class _DragInfo extends Drag {
   void update(DragUpdateDetails details) {
     final Offset delta = !gridView ? _restrictAxis(details.delta, scrollDirection) : details.delta;
     dragPosition += delta;
+    positionNotifier.value = dragPosition;
     onUpdate?.call(this, dragPosition, details.delta);
   }
 
@@ -89,16 +92,23 @@ class _DragInfo extends Drag {
   }
 
   Widget createProxy(BuildContext context) {
-    return capturedThemes.wrap(
-      _DragItemProxy(
-        listState: listState,
-        index: index,
-        position: dragPosition - dragOffset - _overlayOrigin(context),
-        size: itemSize,
-        animation: _proxyAnimation!,
-        proxyDecorator: proxyDecorator,
-        child: child,
-      ),
+    final overlayOrigin = _overlayOrigin(context);
+    return ValueListenableBuilder<Offset>(
+      valueListenable: positionNotifier,
+      child: child,
+      builder: (context, currentPosition, staticChild) {
+        return capturedThemes.wrap(
+          _DragItemProxy(
+            listState: listState,
+            index: index,
+            position: currentPosition - dragOffset - overlayOrigin,
+            size: itemSize,
+            animation: _proxyAnimation!,
+            proxyDecorator: proxyDecorator,
+            child: staticChild!,
+          ),
+        );
+      },
     );
   }
 }

@@ -207,11 +207,11 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   }
 
   void _dragUpdate(_DragInfo item, Offset position, Offset delta) {
-    setState(() {
-      _overlayEntry?.markNeedsBuild();
-      _dragUpdateItems();
-      _autoScrollIfNecessary();
-    });
+    // optimization: Removed setState() and markNeedsBuild().
+    // The overlay position is now handled by ValueNotifier in _DragInfo,
+    // and item gap updates (in _dragUpdateItems) handle their own rebuilds.
+    _dragUpdateItems();
+    _autoScrollIfNecessary();
   }
 
   void _dragCancel(_DragInfo item) {
@@ -292,46 +292,55 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   }
 
   void _dragEnd(_DragInfo item) {
-    setState(() {
-      if (_insertIndex == item.index || isGrid) {
-        _finalDropPosition = _itemOffsetAt(_insertIndex!);
-      } else if (_reverse) {
-        if (_insertIndex! >= _items.length - 1) {
-          _finalDropPosition = _itemStartOffsetAt(_items.length - 1) - _extentOffset(item.itemExtent, scrollDirection);
-        } else {
-          int atIndex = _dragIndex! < _insertIndex! ? _insertIndex! + 1 : _insertIndex!;
-          if (_dragIndex! > _insertIndex! && widget.lockedIndices.isNotEmpty) {
-            atIndex = _insertIndex! + 1;
-            if (!widget.lockedIndices.contains(atIndex)) {
-              atIndex = _insertIndex!;
-            }
-          }
-          _finalDropPosition = _itemStartOffsetAt(atIndex) + _extentOffset(_itemExtent(atIndex), scrollDirection);
-        }
+    // optimization: calculation of _finalDropPosition does not require setState.
+    // The value is read directly by the proxy animation loop.
+    // Avoiding setState prevents a full grid rebuild at the start of the drop animation.
+    if (_insertIndex == item.index || isGrid) {
+      _finalDropPosition = _itemOffsetAt(_insertIndex!);
+    } else if (_reverse) {
+      if (_insertIndex! >= _items.length - 1) {
+        _finalDropPosition = _itemStartOffsetAt(_items.length - 1) - _extentOffset(item.itemExtent, scrollDirection);
       } else {
-        if (_insertIndex! == 0) {
-          _finalDropPosition = _itemStartOffsetAt(0) - _extentOffset(item.itemExtent, scrollDirection);
-        } else {
-          int atIndex = _dragIndex! < _insertIndex! ? _insertIndex! : _insertIndex! - 1;
-
-          // if the item is locked, we need to calculate final position from the previous item
-          // if the previous item is locked, then we calculate position from the previous item
-          if (_dragIndex! < _insertIndex! && widget.lockedIndices.isNotEmpty) {
-            atIndex = _insertIndex! - 1;
-            if (!widget.lockedIndices.contains(atIndex)) {
-              atIndex = _insertIndex!;
-            }
+        int atIndex = _dragIndex! < _insertIndex! ? _insertIndex! + 1 : _insertIndex!;
+        if (_dragIndex! > _insertIndex! && widget.lockedIndices.isNotEmpty) {
+          atIndex = _insertIndex! + 1;
+          if (!widget.lockedIndices.contains(atIndex)) {
+            atIndex = _insertIndex!;
           }
-          _finalDropPosition = _itemStartOffsetAt(atIndex) + _extentOffset(_itemExtent(atIndex), scrollDirection);
         }
+        _finalDropPosition = _itemStartOffsetAt(atIndex) + _extentOffset(_itemExtent(atIndex), scrollDirection);
       }
-    });
-    widget.onReorderEnd?.call(_insertIndex!);
+    } else {
+      if (_insertIndex! == 0) {
+        _finalDropPosition = _itemStartOffsetAt(0) - _extentOffset(item.itemExtent, scrollDirection);
+      } else {
+        int atIndex = _dragIndex! < _insertIndex! ? _insertIndex! : _insertIndex! - 1;
+
+        // if the item is locked, we need to calculate final position from the previous item
+        // if the previous item is locked, then we calculate position from the previous item
+        if (_dragIndex! < _insertIndex! && widget.lockedIndices.isNotEmpty) {
+          atIndex = _insertIndex! - 1;
+          if (!widget.lockedIndices.contains(atIndex)) {
+            atIndex = _insertIndex!;
+          }
+        }
+        _finalDropPosition = _itemStartOffsetAt(atIndex) + _extentOffset(_itemExtent(atIndex), scrollDirection);
+      }
+    }
+    // optimization: Defer the callback to _dropCompleted.
+    // We do NOT call widget.onReorderEnd here.
+    // Calling it here triggers a parent rebuild (via onReorderingStateChanged) immediately,
+    // which causes frame drops during the start of the settle animation.
+    // By moving it to _dropCompleted, we ensure the animation finishes smoothly first.
   }
 
   void _dropCompleted() {
     final int fromIndex = _dragIndex!;
     final int toIndex = _insertIndex!;
+
+    // Call onReorderEnd here, after the animation is officially done.
+    widget.onReorderEnd?.call(toIndex);
+
     if (fromIndex != toIndex) {
       widget.onReorder?.call(fromIndex, toIndex);
     }
