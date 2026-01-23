@@ -141,24 +141,30 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
     required MultiDragGestureRecognizer recognizer,
   }) {
     assert(0 <= index && index < _itemsCount);
-    setState(() {
-      if (_dragInfo != null) {
-        cancelReorder();
-      } else if (_recognizer != null && _recognizerPointer != event.pointer) {
-        _recognizer!.dispose();
-        _recognizer = null;
-        _recognizerPointer = null;
-      }
-      if (_items.containsKey(index)) {
-        _dragIndex = index;
-        _recognizer = recognizer
-          ..onStart = _dragStart
-          ..addPointer(event);
-        _recognizerPointer = event.pointer;
-      } else {
-        throw Exception("Attempting ro start drag on a non-visible item");
-      }
-    });
+
+    // Check if we need to cancel an existing drag or clean up old recognizers.
+    if (_dragInfo != null) {
+      cancelReorder();
+    } else if (_recognizer != null && _recognizerPointer != event.pointer) {
+      _recognizer!.dispose();
+      _recognizer = null;
+      _recognizerPointer = null;
+    }
+
+    // Register the recognizer for the new pointer.
+    // optimization: We do NOT use setState here because _dragIndex and _recognizer
+    // are not used in the build method until the drag actually starts (onStart).
+    // Avoiding setState prevents rebuilding the entire grid on every touch (PointerDown),
+    // which fixes lag/unresponsiveness when many items are present.
+    if (_items.containsKey(index)) {
+      _dragIndex = index;
+      _recognizer = recognizer
+        ..onStart = _dragStart
+        ..addPointer(event);
+      _recognizerPointer = event.pointer;
+    } else {
+      throw Exception("Attempting ro start drag on a non-visible item");
+    }
   }
 
   Drag? _dragStart(Offset position) {
