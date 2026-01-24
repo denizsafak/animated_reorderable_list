@@ -157,11 +157,9 @@ class ReorderableAnimatedContentState extends State<ReorderableAnimatedContent> 
   }
 
   void _updateItemPosition() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        widget.updateItemPosition?.call();
-      }
-    });
+    if (mounted) {
+      widget.updateItemPosition?.call();
+    }
   }
 
   @override

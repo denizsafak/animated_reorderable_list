@@ -131,6 +131,19 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   void didUpdateWidget(covariant ReorderableAnimatedBuilder oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.initialCount != oldWidget.initialCount) {
+      // optimization: Sync _itemsCount and childrenMap when the parent updates the list size.
+      // This ensures that simple list updates (like loading/reloading) are reflected
+      // without needing complex insert/remove animations if those weren't triggered.
+      setState(() {
+        _itemsCount = widget.initialCount;
+
+        // Ensure childrenMap matches the new definition
+        final newMap = <int, ItemTransitionData>{};
+        for (int i = 0; i < _itemsCount; i++) {
+          newMap[i] = childrenMap[i] ?? ItemTransitionData();
+        }
+        childrenMap = newMap;
+      });
       cancelReorder();
     }
   }

@@ -65,9 +65,16 @@ class RenderSliverConstraintsCapture extends RenderProxySliver {
   /// Called during layout when sliver constraints are available.
   void Function(SliverConstraints constraints) onConstraintsChanged;
 
+  SliverConstraints? _lastConstraints;
+
   @override
   void performLayout() {
-    onConstraintsChanged(constraints);
+    // optimization: Only notify if constraints actually changed to avoid unnecessary updates
+    // during animations or parent rebuilds. This is critical for smooth navigation transitions.
+    if (_lastConstraints != constraints) {
+      _lastConstraints = constraints;
+      onConstraintsChanged(constraints);
+    }
     super.performLayout();
   }
 }
