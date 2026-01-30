@@ -101,6 +101,7 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   bool _isDragging = false;
 
   bool autoScrolling = false;
+  double _autoScrollSpeed = 0.0;
 
   Axis get scrollDirection => axisDirectionToAxis(_scrollable.axisDirection);
 
@@ -240,67 +241,61 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
     }
 
     final position = _dragInfo!.scrollable!.position;
-    double? newOffset;
 
-    const duration = Duration(milliseconds: 14);
-    const step = 1.0;
-    const overDragMax = 20.0;
-    const overDragCoef = 10;
+    // Use the exact auto-scroll behaviour from AutoScrollReorderableGridView
+    const double autoScrollZoneHeight = 100.0;
+    const double maxScrollSpeed = 1.0; // logical pixels per frame
 
-    final isVertical = widget.scrollDirection == Axis.vertical;
-
-    /// get the scroll window position on the screen
+    // Get scrollable position on screen
     final scrollRenderBox = _dragInfo!.scrollable!.context.findRenderObject()! as RenderBox;
     final Offset scrollPosition = scrollRenderBox.localToGlobal(Offset.zero);
+    final double availableHeight = scrollRenderBox.size.height;
 
-    /// calculate the start and end position for the scroll window
-    double scrollWindowStart = isVertical ? scrollPosition.dy : scrollPosition.dx;
-    double scrollWindowEnd =
-        scrollWindowStart + (isVertical ? scrollRenderBox.size.height : scrollRenderBox.size.width);
+    // Pointer position relative to the scrollable top
+    final double pointerY = _dragInfo!.dragPosition.dy - scrollPosition.dy;
 
-    /// get the proxy (dragged) object's position on the screen
-    final proxyObjectPosition = _dragInfo!.dragPosition - _dragInfo!.dragOffset;
-
-    /// calculate the start and end position for the proxy object
-    double proxyObjectStart = isVertical ? proxyObjectPosition.dy : proxyObjectPosition.dx;
-    double proxyObjectEnd = proxyObjectStart + (isVertical ? _dragInfo!.itemSize.height : _dragInfo!.itemSize.width);
-
-    if (!_reverse) {
-      /// if start of proxy object is before scroll window
-      if (proxyObjectStart < scrollWindowStart && position.pixels > position.minScrollExtent) {
-        final overDrag = max(scrollWindowStart - proxyObjectStart, overDragMax);
-        newOffset = max(position.minScrollExtent, position.pixels - step * overDrag / overDragCoef);
-      }
-      /// if end of proxy object is after scroll window
-      else if (proxyObjectEnd > scrollWindowEnd && position.pixels < position.maxScrollExtent) {
-        final overDrag = max(proxyObjectEnd - scrollWindowEnd, overDragMax);
-        newOffset = min(position.maxScrollExtent, position.pixels + step * overDrag / overDragCoef);
-      }
+    if (pointerY < autoScrollZoneHeight) {
+      final progress = (autoScrollZoneHeight - pointerY) / autoScrollZoneHeight;
+      final easedProgress = Curves.easeInOut.transform(progress.clamp(0.0, 1.0));
+      final double speed = -maxScrollSpeed * easedProgress;
+      _startAutoScroll(speed, position);
+    } else if (pointerY > availableHeight - autoScrollZoneHeight) {
+      final progress = (pointerY - (availableHeight - autoScrollZoneHeight)) / autoScrollZoneHeight;
+      final easedProgress = Curves.easeInOut.transform(progress.clamp(0.0, 1.0));
+      final double speed = maxScrollSpeed * easedProgress;
+      _startAutoScroll(speed, position);
     } else {
-      /// if start of proxy object is before scroll window
-      if (proxyObjectStart < scrollWindowStart && position.pixels < position.maxScrollExtent) {
-        final overDrag = max(scrollWindowStart - proxyObjectStart, overDragMax);
-        newOffset = max(position.minScrollExtent, position.pixels + step * overDrag / overDragCoef);
-      }
-      /// if end of proxy object is after scroll window
-      else if (proxyObjectEnd > scrollWindowEnd && position.pixels > position.minScrollExtent) {
-        final overDrag = max(proxyObjectEnd - scrollWindowEnd, overDragMax);
-        newOffset = min(position.maxScrollExtent, position.pixels - step * overDrag / overDragCoef);
-      }
+      _stopAutoScroll();
+    }
+  }
+
+  void _startAutoScroll(double speed, ScrollPosition position) {
+    if (!_isDragging || !position.hasPixels) return;
+    _autoScrollSpeed = speed;
+    _performAutoScroll(position);
+  }
+
+  void _stopAutoScroll() {
+    _autoScrollSpeed = 0.0;
+  }
+
+  void _performAutoScroll(ScrollPosition position) {
+    if (_autoScrollSpeed == 0.0 || !position.hasPixels) return;
+
+    final currentOffset = position.pixels;
+    final maxOffset = position.maxScrollExtent;
+    final newOffset = (currentOffset + _autoScrollSpeed).clamp(position.minScrollExtent, maxOffset);
+
+    if (newOffset != currentOffset) {
+      position.jumpTo(newOffset);
     }
 
-    if (newOffset != null && (newOffset - position.pixels).abs() >= 1.0) {
-      autoScrolling = true;
-      await position.animateTo(
-        newOffset,
-        duration: duration,
-        curve: Curves.linear,
-      );
-      autoScrolling = false;
-      if (_dragInfo != null) {
-        _dragUpdateItems();
-        _autoScrollIfNecessary();
-      }
+    if (_autoScrollSpeed != 0.0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_dragInfo == null || _dragInfo!.scrollable == null) return;
+        final pos = _dragInfo!.scrollable!.position;
+        _performAutoScroll(pos);
+      });
     }
   }
 
