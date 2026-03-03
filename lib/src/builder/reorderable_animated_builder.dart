@@ -132,19 +132,25 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   void didUpdateWidget(covariant ReorderableAnimatedBuilder oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.initialCount != oldWidget.initialCount) {
-      // optimization: Sync _itemsCount and childrenMap when the parent updates the list size.
-      // This ensures that simple list updates (like loading/reloading) are reflected
-      // without needing complex insert/remove animations if those weren't triggered.
-      setState(() {
-        _itemsCount = widget.initialCount;
+      // If removal animations are already in progress (started by calculateDiff
+      // → removeItem just before this callback), let the animation path handle
+      // the count adjustment via _onItemRemoved.  Syncing here would double-
+      // decrement _itemsCount AND destroy the fill animation where remaining
+      // items slide into the vacated position.
+      if (_outgoingItems.isEmpty) {
+        // No active removal animations — sync directly.  This covers simple
+        // list updates like loading/reloading that bypass calculateDiff.
+        setState(() {
+          _itemsCount = widget.initialCount;
 
-        // Ensure childrenMap matches the new definition
-        final newMap = <int, ItemTransitionData>{};
-        for (int i = 0; i < _itemsCount; i++) {
-          newMap[i] = childrenMap[i] ?? ItemTransitionData();
-        }
-        childrenMap = newMap;
-      });
+          // Ensure childrenMap matches the new definition
+          final newMap = <int, ItemTransitionData>{};
+          for (int i = 0; i < _itemsCount; i++) {
+            newMap[i] = childrenMap[i] ?? ItemTransitionData();
+          }
+          childrenMap = newMap;
+        });
+      }
       cancelReorder();
     }
   }
@@ -662,20 +668,27 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   }
 
   void _onItemRemoved(int itemIndex, Duration removeDuration) {
+    // Guard: if the item index is no longer tracked in childrenMap, it means
+    // didUpdateWidget already synchronised _itemsCount and rebuilt childrenMap
+    // when it received a new initialCount from the parent.  Proceeding here
+    // would double-decrement _itemsCount and wipe childrenMap, causing an
+    // unrelated item to disappear from the UI.
+    if (!childrenMap.containsKey(itemIndex)) {
+      return;
+    }
+
     final updatedChildrenMap = <int, ItemTransitionData>{};
-    if (childrenMap.containsKey(itemIndex)) {
-      for (final entry in childrenMap.entries) {
-        if (entry.key < itemIndex) {
-          updatedChildrenMap[entry.key] = childrenMap[entry.key]!;
-        } else if (entry.key == itemIndex) {
-          continue;
-        } else {
-          updatedChildrenMap[entry.key - 1] = childrenMap[entry.key]!.copyWith(
-            startOffset: _itemOffsetAt(entry.key),
-            endOffset: _itemOffsetAt(entry.key - 1),
-            animate: isGrid,
-          );
-        }
+    for (final entry in childrenMap.entries) {
+      if (entry.key < itemIndex) {
+        updatedChildrenMap[entry.key] = childrenMap[entry.key]!;
+      } else if (entry.key == itemIndex) {
+        continue;
+      } else {
+        updatedChildrenMap[entry.key - 1] = childrenMap[entry.key]!.copyWith(
+          startOffset: _itemOffsetAt(entry.key),
+          endOffset: _itemOffsetAt(entry.key - 1),
+          animate: isGrid,
+        );
       }
     }
     childrenMap.clear();
