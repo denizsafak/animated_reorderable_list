@@ -1008,9 +1008,14 @@ Offset _extentOffset(double extent, Axis scrollDirection) {
   }
 }
 
+/// Global key whose equality uses [Key.==] (value equality) for the sub-key,
+/// not [identical] — this ensures that when the user's [itemBuilder] creates a
+/// new [KeyedWidget] with e.g. `ValueKey(pageNum)` on every data change, the
+/// [ReorderableAnimatedContent] element is still matched and its subtree state
+/// (including [AnimatedOpacity] etc.) is preserved so animations can play.
 @optionalTypeArgs
-class _MotionBuilderItemGlobalKey extends GlobalObjectKey {
-  const _MotionBuilderItemGlobalKey(this.subKey, this.state) : super(subKey);
+class _MotionBuilderItemGlobalKey extends GlobalKey {
+  const _MotionBuilderItemGlobalKey(this.subKey, this.state) : super.constructor();
 
   final Key subKey;
   final State state;
@@ -1024,10 +1029,7 @@ class _MotionBuilderItemGlobalKey extends GlobalObjectKey {
   }
 
   @override
-  int get hashCode => Object.hash(
-    subKey,
-    state,
-  );
+  int get hashCode => Object.hash(subKey, state);
 }
 
 class _ActiveItem implements Comparable<_ActiveItem> {
