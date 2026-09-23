@@ -990,7 +990,16 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
 
   Widget _insertItemBuilder(_ActiveItem? incomingItem, Widget child) {
     final Animation<double> animation = incomingItem?.controller ?? kAlwaysCompleteAnimation;
-    final Animation<double> sizeAnimation = incomingItem?.sizeAnimation ?? kAlwaysCompleteAnimation;
+    // Steady state (no insert animation in flight): return the child without
+    // the SizeTransition wrapper. SizeTransition always clips its child via
+    // ClipRect — even at sizeFactor 1.0 — which would otherwise cut off any
+    // paint extending past the child's bounds (e.g. the outer half of an
+    // outline stroke or a glow shadow), making decorated items look slimmer
+    // than identical items outside this list.
+    if (incomingItem == null) {
+      return widget.insertAnimationBuilder(context, child, animation);
+    }
+    final Animation<double> sizeAnimation = incomingItem.sizeAnimation ?? kAlwaysCompleteAnimation;
     return SizeTransition(
       axis: widget.scrollDirection,
       sizeFactor: sizeAnimation,
