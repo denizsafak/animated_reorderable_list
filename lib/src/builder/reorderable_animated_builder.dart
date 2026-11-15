@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import '../component/sliver_constraints_capture.dart';
 import '../component/drag_listener.dart';
 import '../model/item_transition_data.dart';
@@ -216,13 +217,6 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
     assert(_overlayEntry == null);
     _overlayEntry = OverlayEntry(builder: _dragInfo!.createProxy);
     overlay.insert(_overlayEntry!);
-
-    for (final ReorderableAnimatedContentState childItem in _items.values) {
-      if (childItem == item || !childItem.mounted) {
-        continue;
-      }
-      item.updateForGap(false);
-    }
     return _dragInfo;
   }
 
@@ -401,24 +395,44 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   void _dragUpdateItems() {
     assert(_dragInfo != null);
 
-    int newIndex = _insertIndex!;
+    int? hitIndex;
 
     final dragCenter = _dragInfo!.itemSize.center(_dragInfo!.dragPosition - _dragInfo!.dragOffset);
 
     for (final ReorderableAnimatedContentState item in _items.values) {
-      if (!item.mounted) continue;
-      final Rect geometry = item.targetGeometryNonOffset();
-      if (widget.lockedIndices.contains(item.index)) {
+      if (!item.mounted || widget.lockedIndices.contains(item.index)) {
         continue;
       }
+      final Rect geometry = item.targetGeometryNonOffset();
       if (geometry.contains(dragCenter)) {
-        newIndex = item.index;
+        hitIndex = item.index;
         break;
       }
     }
 
-    if (newIndex == _insertIndex) return;
-    _insertIndex = newIndex;
+    // Fall back to the nearest unlocked item rect when the dragged center lands
+    // in inter-item spacing or outside the grid edges (e.g. before the first item).
+    if (hitIndex == null) {
+      double bestDistSq = double.infinity;
+      for (final ReorderableAnimatedContentState item in _items.values) {
+        if (!item.mounted || widget.lockedIndices.contains(item.index)) {
+          continue;
+        }
+        final Rect geometry = item.targetGeometryNonOffset();
+        final double clampedX = dragCenter.dx.clamp(geometry.left, geometry.right);
+        final double clampedY = dragCenter.dy.clamp(geometry.top, geometry.bottom);
+        final double dx = dragCenter.dx - clampedX;
+        final double dy = dragCenter.dy - clampedY;
+        final double distSq = dx * dx + dy * dy;
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          hitIndex = item.index;
+        }
+      }
+    }
+
+    if (hitIndex == null || hitIndex == _insertIndex) return;
+    _insertIndex = hitIndex;
 
     for (final ReorderableAnimatedContentState item in _items.values) {
       if (item.index == _dragIndex || widget.lockedIndices.contains(item.index)) {
@@ -446,6 +460,25 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
       targetOffset += _extentOffset(_dragInfo!.itemExtent, scrollDirection);
     }
     if (isGrid) {
+      if (crossAxisCount > 0 && childCrossAxisExtent > 0 && childMainAxisExtent > 0) {
+        final int targetRow = targetIndex ~/ crossAxisCount;
+        final int targetCol = targetIndex % crossAxisCount;
+        final int currentRow = index ~/ crossAxisCount;
+        final int currentCol = index % crossAxisCount;
+        final double colStride = childCrossAxisExtent + crossAxisSpacing;
+        final double rowStride = childMainAxisExtent + mainAxisSpacing;
+        if (scrollDirection == Axis.vertical) {
+          return Offset(
+            (targetCol - currentCol) * colStride,
+            (targetRow - currentRow) * rowStride,
+          );
+        } else {
+          return Offset(
+            (targetRow - currentRow) * rowStride,
+            (targetCol - currentCol) * colStride,
+          );
+        }
+      }
       return _itemOffsetAt(targetIndex) - _itemOffsetAt(index);
     } else {
       if (_reverse) {
@@ -457,10 +490,11 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   }
 
   void registerItem(ReorderableAnimatedContentState item) {
-    if (_dragInfo != null && _items[item.index] != item) {
-      item.updateForGap(false);
-    }
+    final existing = _items[item.index];
     _items[item.index] = item;
+    if (_dragInfo != null && existing != item) {
+      item.updateForGap(existing != null);
+    }
     if (item.index == _dragInfo?.index) {
       item.dragging = true;
       item.dragSize = _dragInfo!.itemSize;
@@ -726,6 +760,7 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
   double childMainAxisExtent = 0.0;
   int crossAxisCount = 0;
   double crossAxisSpacing = 0.0;
+  double mainAxisSpacing = 0.0;
 
   void _updateChildExtent(SliverConstraints constraints) {
     if (widget.delegateBuilder == null) return;
@@ -733,6 +768,7 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
       final delegateBuilder = widget.delegateBuilder as SliverGridDelegateWithFixedCrossAxisCount;
       crossAxisCount = delegateBuilder.crossAxisCount;
       crossAxisSpacing = delegateBuilder.crossAxisSpacing;
+      mainAxisSpacing = delegateBuilder.mainAxisSpacing;
       final childAspectRatio = delegateBuilder.childAspectRatio;
       final usableCrossAxisCount = max(0.0, constraints.crossAxisExtent - crossAxisSpacing * (crossAxisCount - 1));
 
@@ -742,6 +778,7 @@ class ReorderableAnimatedBuilderState extends State<ReorderableAnimatedBuilder>
     if (widget.delegateBuilder is SliverGridDelegateWithMaxCrossAxisExtent) {
       final delegateBuilder = widget.delegateBuilder as SliverGridDelegateWithMaxCrossAxisExtent;
       crossAxisSpacing = delegateBuilder.crossAxisSpacing;
+      mainAxisSpacing = delegateBuilder.mainAxisSpacing;
 
       int childCrossAxisCount = (constraints.crossAxisExtent / (delegateBuilder.maxCrossAxisExtent + crossAxisSpacing))
           .ceil();

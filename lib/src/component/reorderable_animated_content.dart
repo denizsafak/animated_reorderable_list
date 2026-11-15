@@ -24,8 +24,10 @@ class ReorderableAnimatedContentState extends State<ReorderableAnimatedContent> 
   late ReorderableAnimatedBuilderState listState;
 
   Offset _targetOffset = Offset.zero;
-  Offset _startOffset = Offset.zero;
-  AnimationController? _offsetAnimation;
+  Offset _currentOffset = Offset.zero;
+  Offset _velocity = Offset.zero;
+  Ticker? _springTicker;
+  Duration? _lastSpringElapsed;
 
   bool _dragging = false;
 
@@ -85,40 +87,64 @@ class ReorderableAnimatedContentState extends State<ReorderableAnimatedContent> 
 
   void _updateAnimationTranslation() {
     if (widget.transitionData.animate) {
-      Offset offsetDiff = (widget.transitionData.startOffset + offset) - widget.transitionData.endOffset;
-      _startOffset = offsetDiff;
+      final Offset offsetDiff = (widget.transitionData.startOffset + _currentOffset) - widget.transitionData.endOffset;
       if (offsetDiff.dx != 0 || offsetDiff.dy != 0) {
-        if (_offsetAnimation == null) {
-          _offsetAnimation =
-              AnimationController(
-                  vsync: listState,
-                  duration: kAnimationDuration,
-                )
-                ..addListener(rebuild)
-                ..addStatusListener((AnimationStatus status) {
-                  if (status == AnimationStatus.completed) {
-                    widget.updateItemPosition?.call();
-                    _startOffset = _targetOffset;
-                    _offsetAnimation!.dispose();
-                    _offsetAnimation = null;
-                  }
-                })
-                ..forward();
-        } else {
-          _startOffset = offsetDiff;
-          _offsetAnimation!.forward(from: 0.0);
-        }
+        _currentOffset = offsetDiff;
+        _targetOffset = Offset.zero;
+        _ensureSpringRunning(onSettled: widget.updateItemPosition);
       }
     }
   }
 
-  Offset get offset {
-    if (_offsetAnimation != null) {
-      final Offset offset = Offset.lerp(_startOffset, _targetOffset, _offsetAnimation!.value)!;
-      return offset;
+  VoidCallback? _onSpringSettled;
+
+  void _ensureSpringRunning({VoidCallback? onSettled}) {
+    if (onSettled != null) {
+      _onSpringSettled = onSettled;
     }
-    return _targetOffset;
+    _springTicker ??= createTicker(_onSpringTick);
+    if (!_springTicker!.isActive) {
+      _lastSpringElapsed = null;
+      _springTicker!.start();
+    }
   }
+
+  void _stopSpring() {
+    _springTicker?.stop();
+    _lastSpringElapsed = null;
+    _onSpringSettled = null;
+  }
+
+  void _onSpringTick(Duration elapsed) {
+    final Duration? prev = _lastSpringElapsed;
+    _lastSpringElapsed = elapsed;
+    final double rawDt = prev == null ? (1.0 / 60.0) : (elapsed - prev).inMicroseconds / 1000000.0;
+    final double dt = rawDt.clamp(0.0, 0.032);
+
+    // Critically damped 2D spring preserves momentum on mid-flight target
+    // changes and settles smoothly without linear start/stop jerks.
+    const double stiffness = 380.0;
+    const double damping = 39.0;
+    const int subSteps = 2;
+    final double subDt = dt / subSteps;
+    for (int i = 0; i < subSteps; i++) {
+      final Offset displacement = _currentOffset - _targetOffset;
+      final Offset accel = (-displacement * stiffness) - (_velocity * damping);
+      _velocity += accel * subDt;
+      _currentOffset += _velocity * subDt;
+    }
+
+    if ((_currentOffset - _targetOffset).distanceSquared < 0.04 && _velocity.distanceSquared < 4.0) {
+      _currentOffset = _targetOffset;
+      _velocity = Offset.zero;
+      final VoidCallback? callback = _onSpringSettled;
+      _stopSpring();
+      callback?.call();
+    }
+    rebuild();
+  }
+
+  Offset get offset => _currentOffset;
 
   void updateForGap(bool animate) {
     if (!mounted) return;
@@ -127,33 +153,13 @@ class ReorderableAnimatedContentState extends State<ReorderableAnimatedContent> 
     _targetOffset = newTargetOffset;
 
     if (animate) {
-      if (_offsetAnimation == null) {
-        _offsetAnimation =
-            AnimationController(
-                vsync: listState,
-                duration: const Duration(milliseconds: 250),
-              )
-              ..addListener(rebuild)
-              ..addStatusListener((AnimationStatus status) {
-                if (status == AnimationStatus.completed) {
-                  _startOffset = _targetOffset;
-                  _offsetAnimation!.dispose();
-                  _offsetAnimation = null;
-                }
-              })
-              ..forward();
-      } else {
-        _startOffset = offset;
-        _offsetAnimation!.forward(from: 0.0);
-      }
+      _ensureSpringRunning();
     } else {
-      if (_offsetAnimation != null) {
-        _offsetAnimation!.dispose();
-        _offsetAnimation = null;
-      }
-      _startOffset = _targetOffset;
+      _stopSpring();
+      _currentOffset = _targetOffset;
+      _velocity = Offset.zero;
+      rebuild();
     }
-    rebuild();
   }
 
   void _updateItemPosition() {
@@ -178,12 +184,10 @@ class ReorderableAnimatedContentState extends State<ReorderableAnimatedContent> 
   }
 
   void resetGap() {
-    if (_offsetAnimation != null) {
-      _offsetAnimation!.dispose();
-      _offsetAnimation = null;
-    }
-    _startOffset = Offset.zero;
+    _stopSpring();
+    _currentOffset = Offset.zero;
     _targetOffset = Offset.zero;
+    _velocity = Offset.zero;
     rebuild();
   }
 
@@ -208,7 +212,8 @@ class ReorderableAnimatedContentState extends State<ReorderableAnimatedContent> 
   @override
   void dispose() {
     listState.unregisterItem(index, this);
-    _offsetAnimation?.dispose();
+    _springTicker?.dispose();
+    _springTicker = null;
     super.dispose();
   }
 
